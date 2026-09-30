@@ -27,6 +27,7 @@ from cse351 import *
 # Global variable for counting the number of primes found
 prime_count = 0
 numbers_processed = 0
+lock = threading.Lock()
 
 def is_prime(n):
     """
@@ -44,10 +45,20 @@ def is_prime(n):
         i += 6
     return True
 
+def worker(start, end):
+    global prime_count                  
+    global numbers_processed            
+    for i in range(start, end):
+        with lock:
+            numbers_processed += 1
+        if is_prime(i):
+            with lock:
+                prime_count += 1
+
 
 def main():
-    global prime_count                  # Required in order to use a global variable
-    global numbers_processed            # Required in order to use a global variable
+    global prime_count                  
+    global numbers_processed            
 
     log = Log(show_terminal=True)
     log.start_timer()
@@ -55,12 +66,20 @@ def main():
     start = 10000000000
     range_count = 100000
     numbers_processed = 0
-    for i in range(start, start + range_count):
-        numbers_processed += 1
-        if is_prime(i):
-            prime_count += 1
-            print(i, end=', ', flush=True)
-    print(flush=True)
+
+    threads = []
+    for i in range(10):
+        newstart = start + (i * 10000)
+        newend = newstart + 10000
+        t = threading.Thread(target=worker,args=(newstart, newend))
+        threads.append(t)
+
+    for t in threads:
+        t.start()
+
+    for t in threads:
+        t.join()
+
 
     # Should find 4306 primes
     log.write(f'Numbers processed = {numbers_processed}')
