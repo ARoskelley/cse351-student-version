@@ -10,6 +10,7 @@ See instructions in canvas for this team activity.
 
 import random
 import threading
+import numpy
 
 # Include CSE 351 common Python files. 
 from cse351 import *
@@ -56,19 +57,37 @@ class Queue351():
         return len(self.__items) + extra
 
 # ---------------------------------------------------------------------------
-def producer():
+def producer(que,bar,sem_empty,sem_full):
     for i in range(PRIME_COUNT):
         number = random.randint(1, 1_000_000_000_000)
         # TODO - place on queue for workers
+        sem_empty.acquire()  # Wait for empty slot
+        que.put(number)
+        sem_full.release()  # Signal that an item was added
+
+    id = bar.wait()  # Wait for all producers to finish
 
     # TODO - select one producer to send the "All Done" message
+    if id == 0:
+        for i in range(CONSUMERS):
+            sem_empty.acquire()
+            que.put(None)  # Send "All Done" message to consumers
+            sem_full.release()
 
 # ---------------------------------------------------------------------------
-def consumer():
+def consumer(que,sem_empty,sem_full):
     # TODO - get values from the queue and check if they are prime
+    sem_full.acquire()
+    number = que.get()
+    sem_empty.release()
     # TODO - if prime, write to the file
+    if is_prime(number):
+        with open(FILENAME, 'a') as f:
+            f.write(f"{number}\n")
+        print(f"Found prime: {number}")
     # TODO - if "All Done" message, exit the loop
-    ...
+    if number is None:
+        return
 
 # ---------------------------------------------------------------------------
 def main():
@@ -78,12 +97,26 @@ def main():
     que = Queue351()
 
     # TODO - create semaphores for the queue (see Queue351 class)
+    sem_empty = threading.Semaphore(MAX_QUEUE_SIZE)
+    sem_full = threading.Semaphore(0)
 
     # TODO - create barrier
+    bar = threading.Barrier(PRODUCERS + CONSUMERS)
 
     # TODO - create producers threads (see PRODUCERS value)
-
+    pros = [ threading.Thread(target=producer, args=(que,bar,sem_empty,sem_full)) for id in range(PRODUCERS) ]
     # TODO - create consumers threads (see CONSUMERS value)
+    cons = [ threading.Thread(target=consumer, args=(que,sem_empty,sem_full)) for id in range(CONSUMERS) ]
+
+    for p in pros:
+        p.start()
+    for c in cons:
+        c.start()
+
+    for p in pros:
+        p.join()
+    for c in cons:
+        c.join()
 
     if os.path.exists(FILENAME):
         with open(FILENAME, 'r') as f:
