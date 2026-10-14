@@ -22,30 +22,73 @@ from common import *
 
 from cse351 import *
 
-THREADS = 0                 # TODO - set for your program
-WORKERS = 0                 # TODO - set for your program
+THREADS = 150               # Threads retrieving records from the server
+WORKERS = 10                # Threads storing records into the NOAA object
 RECORDS_TO_RETRIEVE = 5000  # Don't change
+MAX_QUEUE_SIZE = 10         # Queue351 asserts it never holds more than this
 
 
 # ---------------------------------------------------------------------------
-def retrieve_weather_data():
-    # TODO - fill out this thread function (and arguments)
-    ...
+def retrieve_weather_data(command_que, command_empty, command_full,
+                          data_que, data_empty, data_full):
+    while True:
+        command_full.acquire()
+        command = command_que.get()
+        command_empty.release()
+
+        # "All Done" message
+        if command is None:
+            break
+
+        city, recno = command
+        record = get_data_from_server(f'{TOP_API_URL}/record/{city}/{recno}')
+
+        data_empty.acquire()
+        data_que.put((city, record['date'], record['temp']))
+        data_full.release()
 
 
 # ---------------------------------------------------------------------------
-# TODO - Create Worker threaded class
+class Worker(threading.Thread):
+
+    def __init__(self, noaa, data_que, data_empty, data_full):
+        super().__init__()
+        self.noaa = noaa
+        self.data_que = data_que
+        self.data_empty = data_empty
+        self.data_full = data_full
+
+    def run(self):
+        while True:
+            self.data_full.acquire()
+            data = self.data_que.get()
+            self.data_empty.release()
+
+            # "All Done" message
+            if data is None:
+                break
+
+            city, date, temp = data
+            self.noaa.store(city, date, temp)
 
 
 # ---------------------------------------------------------------------------
-# TODO - Complete this class
 class NOAA:
 
     def __init__(self):
-        ...
+        self.lock = threading.Lock()
+        self.temps = {name: [] for name in CITIES}
+
+    def store(self, city, date, temp):
+        with self.lock:
+            self.temps[city].append(temp)
 
     def get_temp_details(self, city):
-        return 0.0
+        with self.lock:
+            temps = self.temps[city]
+            if len(temps) == 0:
+                return 0.0
+            return round(sum(temps) / len(temps), 4)
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +168,46 @@ def main():
 
     records = RECORDS_TO_RETRIEVE
 
-    # TODO - Create any queues, semaphores, locks or barriers you need
+    command_que = Queue351()
+    command_empty = threading.Semaphore(MAX_QUEUE_SIZE)
+    command_full = threading.Semaphore(0)
 
+    data_que = Queue351()
+    data_empty = threading.Semaphore(MAX_QUEUE_SIZE)
+    data_full = threading.Semaphore(0)
 
+    retrievers = [threading.Thread(target=retrieve_weather_data,
+                                   args=(command_que, command_empty, command_full,
+                                         data_que, data_empty, data_full))
+                  for _ in range(THREADS)]
+    workers = [Worker(noaa, data_que, data_empty, data_full) for _ in range(WORKERS)]
+
+    for t in retrievers + workers:
+        t.start()
+
+    for name in CITIES:
+        for recno in range(records):
+            command_empty.acquire()
+            command_que.put((name, recno))
+            command_full.release()
+
+    # Tell the retrievers they are done
+    for _ in range(THREADS):
+        command_empty.acquire()
+        command_que.put(None)
+        command_full.release()
+
+    for t in retrievers:
+        t.join()
+
+    # All records are on the data queue, tell the workers they are done
+    for _ in range(WORKERS):
+        data_empty.acquire()
+        data_que.put(None)
+        data_full.release()
+
+    for t in workers:
+        t.join()
 
 
     # End server - don't change below
