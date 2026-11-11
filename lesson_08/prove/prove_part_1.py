@@ -2,7 +2,7 @@
 Course: CSE 251 
 Assignment: 08 Prove Part 1
 File:   prove_part_1.py
-Author: <Add name here>
+Author: Aiden Roskelley
 
 Purpose: Part 1 of assignment 8, finding the path to the end of a maze using recursion.
 
@@ -11,6 +11,41 @@ Instructions:
 - Do not create classes for this assignment, just functions.
 - Do not use any other Python modules other than the ones included.
 - Complete any TODO comments.
+
+-------------------------------------------------------------------------------
+CHECKLIST (mark [x] as you go)
+-------------------------------------------------------------------------------
+Setup
+  [ ] Put your name in the Author line above
+  [ ] opencv-python is installed (python -m pip install opencv-python)
+  [ ] Read the public methods in maze.py (the ones that don't start with '_')
+
+Recursive helper (an inner function inside solve_path)
+  [ ] Define the inner function; it takes a position (row, col)
+  [ ] If the square can't be moved into, return "not found"
+  [ ] Move into the square (maze.move with COLOR) and add it to path
+  [ ] Base case: if this is the end position, return "found"
+  [ ] Recurse into each of maze.get_possible_moves(row, col)
+  [ ] If any recursive call found the end, return "found" right away
+  [ ] Dead end: maze.restore() the square, remove it from path,
+      return "not found"
+
+solve_path
+  [ ] Start the recursion at maze.get_start_pos()
+  [ ] Return path (start position first, end position last)
+
+Testing
+  [ ] very-small.bmp reports a path length of about 11
+  [ ] Grey squares appear where the search backed up
+  [ ] The final colored path runs unbroken from start to end
+  [ ] All 10 mazes finish with no errors or recursion crashes
+  [ ] No "ERROR: You are trying to move..." messages in the output
+
+Submission
+  [ ] Submit prove_part_1.py with prove_part_2.py
+  [ ] Add a submission comment with your grading category and a 1-2
+      sentence justification
+-------------------------------------------------------------------------------
 """
 
 import math

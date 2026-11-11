@@ -27,6 +27,55 @@ Why would it work?
 
 <Answer here>
 
+-------------------------------------------------------------------------------
+CHECKLIST (mark [x] as you go)
+-------------------------------------------------------------------------------
+Setup
+  [ ] Put your name in the Author line above
+  [ ] Create one shared threading.Lock() at module level
+
+Recursive thread function (e.g. explore(maze, row, col, color))
+  [ ] First thing: if stop is set, return
+  [ ] Under the lock: if the square can't be moved into, return
+      (this thread lost a race or ran into another thread);
+      otherwise maze.move() into it with this thread's color
+  [ ] If this is the end position: set stop = True and return
+  [ ] Get the possible moves; if there are none, return (dead end or
+      collision)
+  [ ] For every move except the first:
+        [ ] Under the lock: get_color() and thread_count += 1
+        [ ] Create and start a Thread that runs explore on that move
+        [ ] Keep the thread in a list of children
+  [ ] Recurse into the first move with the SAME color
+  [ ] Only after that recursive call returns, join all child threads
+
+solve_find_end
+  [ ] Reset stop = False and thread_count = 0 for each maze
+  [ ] Create the first thread at maze.get_start_pos() with get_color()
+  [ ] Count the first thread in thread_count
+  [ ] Start it, then join it (it joins its children, so this waits for all)
+
+Concurrency checks
+  [ ] Don't call join() right after start() (that makes the threads take
+      turns instead of running at the same time)
+  [ ] Every read-then-write of shared globals happens under the lock
+  [ ] Playback shows several colors moving at the same time
+  [ ] All threads stop soon after the exit is found
+
+Testing
+  [ ] All 10 mazes finish with no errors or crashes
+  [ ] No "ERROR: You are trying to move..." messages in the output
+  [ ] Thread counts look reasonable (very-small: a few; large: hundreds)
+  [ ] If large mazes crash in threads: raise threading.stack_size()
+      before creating any threads
+
+Questions and submission
+  [ ] Answer "What would be your strategy?" above
+  [ ] Answer "Why would it work?" above
+  [ ] Submit prove_part_2.py with prove_part_1.py
+  [ ] Add a submission comment with your grading category and a 1-2
+      sentence justification
+-------------------------------------------------------------------------------
 """
 
 import math
