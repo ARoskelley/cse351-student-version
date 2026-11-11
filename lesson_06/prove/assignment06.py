@@ -1,7 +1,7 @@
 """
 Course: CSE 351
 Assignment: 06
-Author: [Your Name]
+Author: Aiden Roskelley
 
 Instructions:
 
@@ -30,6 +30,14 @@ CANNY_THRESHOLD2 = 155
 # Allowed image extensions
 ALLOWED_EXTENSIONS = ['.jpg']
 
+# Number of processes for each stage of the pipeline
+SMOOTH_PROCESSES = 4
+GRAYSCALE_PROCESSES = 2
+EDGE_PROCESSES = 4
+
+# Message placed on a queue to tell a worker there is no more work
+ALL_DONE = None
+
 # ---------------------------------------------------------------------------
 def create_folder_if_not_exists(folder_path):
     if not os.path.exists(folder_path):
@@ -57,77 +65,114 @@ def task_detect_edges(image, threshold1, threshold2):
     return cv2.Canny(image, threshold1, threshold2)
 
 # ---------------------------------------------------------------------------
-def process_images_in_folder(input_folder,              # input folder with images
-                             output_folder,             # output folder for processed images
-                             processing_function,       # function to process the image (ie., task_...())
-                             load_args=None,            # Optional args for cv2.imread
-                             processing_args=None):     # Optional args for processing function
+def smooth_worker(que_in, que_out, barrier, next_stage_count):
+    """ Stage 1: read an original image from disk and smooth it.
+        que_in  items: filename
+        que_out items: (filename, smoothed image) """
+    while True:
+        filename = que_in.get()
+        if filename is ALL_DONE:
+            break
 
-    create_folder_if_not_exists(output_folder)
-    print(f"\nProcessing images from '{input_folder}' to '{output_folder}'...")
-
-    processed_count = 0
-    for filename in os.listdir(input_folder):
-        file_ext = os.path.splitext(filename)[1].lower()
-        if file_ext not in ALLOWED_EXTENSIONS:
-            continue
-
-        input_image_path = os.path.join(input_folder, filename)
-        output_image_path = os.path.join(output_folder, filename) # Keep original filename
-
+        input_image_path = os.path.join(INPUT_FOLDER, filename)
         try:
-            # Read the image
-            if load_args is not None:
-                img = cv2.imread(input_image_path, load_args)
-            else:
-                img = cv2.imread(input_image_path)
-
+            img = cv2.imread(input_image_path)
             if img is None:
                 print(f"Warning: Could not read image '{input_image_path}'. Skipping.")
                 continue
-
-            # Apply the processing function
-            if processing_args:
-                processed_img = processing_function(img, *processing_args)
-            else:
-                processed_img = processing_function(img)
-
-            # Save the processed image
-            cv2.imwrite(output_image_path, processed_img)
-
-            processed_count += 1
+            que_out.put((filename, task_smooth_image(img, GAUSSIAN_BLUR_KERNEL_SIZE)))
         except Exception as e:
-            print(f"Error processing file '{input_image_path}': {e}")
+            print(f"Error smoothing file '{input_image_path}': {e}")
 
-    print(f"Finished processing. {processed_count} images processed into '{output_folder}'.")
+    if barrier.wait() == 0:
+        for _ in range(next_stage_count):
+            que_out.put(ALL_DONE)
 
 # ---------------------------------------------------------------------------
-def run_image_processing_pipeline():
+def grayscale_worker(que_in, que_out, barrier, next_stage_count):
+    """ Stage 2: convert a smoothed image to grayscale.
+        que_in  items: (filename, smoothed image)
+        que_out items: (filename, grayscale image) """
+    while True:
+        item = que_in.get()
+        if item is ALL_DONE:
+            break
+
+        filename, img = item
+        try:
+            que_out.put((filename, task_convert_to_grayscale(img)))
+        except Exception as e:
+            print(f"Error converting file '{filename}' to grayscale: {e}")
+
+    if barrier.wait() == 0:
+        for _ in range(next_stage_count):
+            que_out.put(ALL_DONE)
+
+# ---------------------------------------------------------------------------
+def edge_worker(que_in):
+    """ Stage 3: detect edges and save the final image to STEP3_OUTPUT_FOLDER.
+        que_in items: (filename, grayscale image) """
+    while True:
+        item = que_in.get()
+        if item is ALL_DONE:
+            break
+
+        filename, img = item
+        output_image_path = os.path.join(STEP3_OUTPUT_FOLDER, filename) # Keep original filename
+        try:
+            edges = task_detect_edges(img, CANNY_THRESHOLD1, CANNY_THRESHOLD2)
+            cv2.imwrite(output_image_path, edges)
+        except Exception as e:
+            print(f"Error detecting edges for file '{filename}': {e}")
+
+# ---------------------------------------------------------------------------
+def run_image_processing_pipeline(log):
     print("Starting image processing pipeline...")
 
-    # TODO
-    # - create queues
-    # - create barriers
-    # - create the three processes groups
-    # - you are free to change anything in the program as long as you
-    #   do all requirements.
+    create_folder_if_not_exists(STEP3_OUTPUT_FOLDER)
 
-    # --- Step 1: Smooth Images ---
-    process_images_in_folder(INPUT_FOLDER, STEP1_OUTPUT_FOLDER, task_smooth_image,
-                             processing_args=(GAUSSIAN_BLUR_KERNEL_SIZE,))
+    que1 = mp.Queue()   
+    que2 = mp.Queue()   
+    que3 = mp.Queue()   
 
-    # --- Step 2: Convert to Grayscale ---
-    process_images_in_folder(STEP1_OUTPUT_FOLDER, STEP2_OUTPUT_FOLDER, task_convert_to_grayscale)
+    smooth_barrier = mp.Barrier(SMOOTH_PROCESSES)
+    grayscale_barrier = mp.Barrier(GRAYSCALE_PROCESSES)
 
-    # --- Step 3: Detect Edges ---
-    process_images_in_folder(STEP2_OUTPUT_FOLDER, STEP3_OUTPUT_FOLDER, task_detect_edges,
-                             load_args=cv2.IMREAD_GRAYSCALE,        
-                             processing_args=(CANNY_THRESHOLD1, CANNY_THRESHOLD2))
+    smoothers = [mp.Process(target=smooth_worker,
+                            args=(que1, que2, smooth_barrier, GRAYSCALE_PROCESSES))
+                 for _ in range(SMOOTH_PROCESSES)]
+    grayscalers = [mp.Process(target=grayscale_worker,
+                              args=(que2, que3, grayscale_barrier, EDGE_PROCESSES))
+                   for _ in range(GRAYSCALE_PROCESSES)]
+    edge_detectors = [mp.Process(target=edge_worker, args=(que3,))
+                      for _ in range(EDGE_PROCESSES)]
+
+    all_processes = smoothers + grayscalers + edge_detectors
+    for p in all_processes:
+        p.start()
+
+    image_count = 0
+    for filename in os.listdir(INPUT_FOLDER):
+        if os.path.splitext(filename)[1].lower() in ALLOWED_EXTENSIONS:
+            que1.put(filename)
+            image_count += 1
+
+    for _ in range(SMOOTH_PROCESSES):
+        que1.put(ALL_DONE)
+
+    for p in all_processes:
+        p.join()
+
+    for que in (que1, que2, que3):
+        que.close()
+
+    output_count = len(os.listdir(STEP3_OUTPUT_FOLDER))
+    log.write(f'Processes: smooth={SMOOTH_PROCESSES}, grayscale={GRAYSCALE_PROCESSES}, edge={EDGE_PROCESSES}')
+    log.write(f'{image_count} images sent into the pipeline')
+    log.write(f'{output_count} images in {STEP3_OUTPUT_FOLDER}')
 
     print("\nImage processing pipeline finished!")
     print(f"Original images are in: '{INPUT_FOLDER}'")
-    print(f"Grayscale images are in: '{STEP1_OUTPUT_FOLDER}'")
-    print(f"Smoothed images are in: '{STEP2_OUTPUT_FOLDER}'")
     print(f"Edge images are in: '{STEP3_OUTPUT_FOLDER}'")
 
 
@@ -143,7 +188,7 @@ if __name__ == "__main__":
         print('Link to faces.zip:')
         print('   https://drive.google.com/file/d/1eebhLE51axpLZoU6s_Shtw1QNcXqtyHM/view?usp=sharing')
     else:
-        run_image_processing_pipeline()
+        run_image_processing_pipeline(log)
 
     log.write()
     log.stop_timer('Total Time To complete')
