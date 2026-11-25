@@ -2,7 +2,7 @@
 Course: CSE 351 
 Assignment: 08 Prove Part 2
 File:   prove_part_2.py
-Author: <Add name here>
+Author: Aiden Roskelley
 
 Purpose: Part 2 of assignment 8, finding the path to the end of a maze using recursion.
 
@@ -21,61 +21,18 @@ position:
 
 What would be your strategy?
 
-<Answer here>
+Pass each thread the path it took to get to its starting square (a copy of the parent's
+path list). As a thread moves, it appends each square to its own path. When a thread finds
+the exit, it saves its path into a shared global (under the lock) before setting stop.
+After all threads are joined, the main thread draws that saved path in a single color.
 
 Why would it work?
 
-<Answer here>
+Every square is claimed by exactly one thread, and each thread's path is the parent's path
+up to the fork plus the squares it walked, so the path held by the thread that reaches the
+exit is a connected route from start to end. Because each thread has its own copy, threads
+never interfere with each other's paths, and only the winning thread writes the shared result.
 
--------------------------------------------------------------------------------
-CHECKLIST (mark [x] as you go)
--------------------------------------------------------------------------------
-Setup
-  [ ] Put your name in the Author line above
-  [ ] Create one shared threading.Lock() at module level
-
-Recursive thread function (e.g. explore(maze, row, col, color))
-  [ ] First thing: if stop is set, return
-  [ ] Under the lock: if the square can't be moved into, return
-      (this thread lost a race or ran into another thread);
-      otherwise maze.move() into it with this thread's color
-  [ ] If this is the end position: set stop = True and return
-  [ ] Get the possible moves; if there are none, return (dead end or
-      collision)
-  [ ] For every move except the first:
-        [ ] Under the lock: get_color() and thread_count += 1
-        [ ] Create and start a Thread that runs explore on that move
-        [ ] Keep the thread in a list of children
-  [ ] Recurse into the first move with the SAME color
-  [ ] Only after that recursive call returns, join all child threads
-
-solve_find_end
-  [ ] Reset stop = False and thread_count = 0 for each maze
-  [ ] Create the first thread at maze.get_start_pos() with get_color()
-  [ ] Count the first thread in thread_count
-  [ ] Start it, then join it (it joins its children, so this waits for all)
-
-Concurrency checks
-  [ ] Don't call join() right after start() (that makes the threads take
-      turns instead of running at the same time)
-  [ ] Every read-then-write of shared globals happens under the lock
-  [ ] Playback shows several colors moving at the same time
-  [ ] All threads stop soon after the exit is found
-
-Testing
-  [ ] All 10 mazes finish with no errors or crashes
-  [ ] No "ERROR: You are trying to move..." messages in the output
-  [ ] Thread counts look reasonable (very-small: a few; large: hundreds)
-  [ ] If large mazes crash in threads: raise threading.stack_size()
-      before creating any threads
-
-Questions and submission
-  [ ] Answer "What would be your strategy?" above
-  [ ] Answer "Why would it work?" above
-  [ ] Submit prove_part_2.py with prove_part_1.py
-  [ ] Add a submission comment with your grading category and a 1-2
-      sentence justification
--------------------------------------------------------------------------------
 """
 
 import math
@@ -127,14 +84,68 @@ def get_color():
     return color
 
 
-# TODO: Add any function(s) you need, if any, here.
+# Protects the maze squares and the shared globals (stop, thread_count, colors)
+lock = threading.Lock()
+
+
+def _explore(maze, row, col, color):
+    """ Recursively explore from (row, col). At a fork, this thread takes the
+        first path and starts a new thread (with a new color) for each other path. """
+    global stop
+    global thread_count
+
+    if stop:
+        return
+
+    # Check-and-move must be atomic so two threads never claim the same square
+    with lock:
+        if stop or not maze.can_move_here(row, col):
+            return
+        maze.move(row, col, color)
+
+    # Base case: found the exit, tell every thread to stop
+    if maze.at_end(row, col):
+        stop = True
+        return
+
+    moves = maze.get_possible_moves(row, col)
+    if not moves:
+        return
+
+    # Spin off a new thread for every path except the first
+    children = []
+    for next_row, next_col in moves[1:]:
+        with lock:
+            new_color = get_color()
+            thread_count += 1
+        t = threading.Thread(target=_explore, args=(maze, next_row, next_col, new_color))
+        t.start()
+        children.append(t)
+
+    # This thread keeps going down the first path with the same color
+    _explore(maze, moves[0][0], moves[0][1], color)
+
+    # Wait for the threads this one created (after doing our own work,
+    # so everything runs concurrently)
+    for t in children:
+        t.join()
 
 
 def solve_find_end(maze):
     """ Finds the end position using threads. Nothing is returned. """
     # When one of the threads finds the end position, stop all of them.
     global stop
+    global thread_count
     stop = False
+    thread_count = 0
+
+    start_row, start_col = maze.get_start_pos()
+    with lock:
+        color = get_color()
+        thread_count += 1
+    first = threading.Thread(target=_explore, args=(maze, start_row, start_col, color))
+    first.start()
+    first.join()
 
 
 
